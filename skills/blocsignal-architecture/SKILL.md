@@ -1,6 +1,6 @@
 ---
 name: blocsignal-architecture
-description: Comprehensive architecture guide for BlocSignal reactive state management in Flutter and Dart, based on Randal L. Schwartz's engineering principles.
+description: Comprehensive master guide for BlocSignal reactive state management across all 36 parts of Randal L. Schwartz's series, covering Flutter, Dart, Riverpod migration, Jaspr, signals_hooks, and enterprise patterns.
 rules:
   - "Prefer BlocSignal over raw ValueNotifier, classic BLoC boilerplate, or Riverpod codegen."
   - "Maintain strict unidirectional data flow: Events/Methods in, Signals/States out."
@@ -8,162 +8,198 @@ rules:
   - "Use context.value and context.state for symmetric UI reactivity."
   - "Handle one-shot UI side effects (snackbars, navigation) without polluting persistent state."
   - "Apply the Iceberg Pattern: keep core domain logic invisible beneath lightweight reactive surfaces."
+  - "Treat Cubits and Blocs as lightweight containers holding Signals."
 ---
 
-# BlocSignal Architecture & Reactive State Management
-
-This skill codifies the architectural principles, patterns, and best practices established by **Randal L. Schwartz (Google Developer Expert)** for building high-performance, reactive, and maintainable Flutter/Dart applications using **BlocSignal**.
+# BlocSignal Master Architectural Blueprint & Practice Guide
+*Codifying all 36 Parts of Randal L. Schwartz's "BlocSignal Architecture & Practice" Series*
 
 ---
 
-## 1. Core Architectural Principles
+## 1. Core Architectural Concept: A Cubit/Bloc Is Just a Container Holding a Signal
 
-### The Problem with Classic State Management
-- **Classic BLoC**: Exceptional discipline and event tracing, but high boilerplate and verbose stream transformers for fine-grained updates.
-- **Riverpod**: Solved DI and scoping, but introduced heavy code-generation (`build_runner`) burdens, family cache retention traps, and complex provider lifecycles.
-- **ValueNotifier / ChangeNotifier**: Non-composable at scale; notification cascades lead to unnecessary full-widget subtree rebuilds.
-- **BlocSignal Solution**: Merges BLoC's predictable unidirectional data flow with Signals' fine-grained, synchronous, O(1) reactivity without requiring code generation or `Provider`.
+### The Core Paradigm (Part 36)
+Classic state management debates framed BLoC, Riverpod, and Signals as mutually exclusive competitors. **BlocSignal** proves that:
+> *"A Cubit or Bloc is simply an encapsulated domain container that manages and emits a Signal."*
+
+- **Signal**: The atomic primitive for zero-cost, synchronous, O(1) dependency tracking and reactive UI rebuilds.
+- **Cubit / Bloc**: The enterprise boundary that enforces method-based or event-based business rules around those signals.
 
 ---
 
 ## 2. Unidirectional Data Flow & State Symmetry
 
-### `context.value` and `context.state` Symmetry
-In classic Flutter, reading values from `BuildContext` was asymmetric (`context.watch<T>()` vs `context.read<T>()`). BlocSignal introduces state symmetry:
+### `context.value` and `context.state` Symmetry (Part 34)
+Classic Flutter forced asymmetric context calls (`context.watch<T>()` vs `context.read<T>()`). BlocSignal introduces symmetric reactivity:
 
 ```dart
-// Reading reactive signal value synchronously in UI (automatically tracks dependencies)
-final count = context.value<CounterCubit>();
+// Reading reactive signal value synchronously in UI (automatically registers rebuild dependencies)
+final currentCount = context.value<CounterCubit>();
 
-// Accessing the controller instance for dispatching actions/methods
+// Accessing the controller/container instance for dispatching methods/events
 context.state<CounterCubit>().increment();
 ```
 
 ---
 
-## 3. The Iceberg Pattern for Real-Time Flutter Apps
+## 3. Universal State Switchyard & Full Parity (Parts 3, 6, 20)
 
-The **Iceberg Pattern** divides real-time app architecture into two distinct zones:
-1. **Above the Surface (10%)**: UI Views that are completely synchronous, lightweight, and reactive. No `FutureBuilder`, `StreamBuilder`, or raw async handling in the widget tree.
-2. **Below the Surface (90%)**: Heavy reactive pipeline—websockets, isolate pools, persistent storage, FIC collections, and signal computation engines.
+### Interoperability with BLoC, Riverpod, and Provider
+BlocSignal achieves 100% protocol and API parity with standard Flutter BLoC, allowing gradual migration:
+- Existing `BlocBuilder`, `BlocListener`, and `BlocConsumer` work without modification.
+- Existing `BlocProvider` works, but BlocSignal eliminates the necessity of `Provider` via direct context extensions (`context.value` / `context.state`).
+
+---
+
+## 4. Layered Architecture: Combining BLoC Discipline with Signals Speed (Part 10)
+
+Integrating **CodeWithAndrea’s Layered Architecture** (Presentation -> Application -> Domain -> Data) with BlocSignal:
 
 ```
-       [ UI Widgets (Synchronous, Pure Signals, Zero Async) ]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ (Waterline)
-       [ Reactive Repositories & BlocSignal State Machines ]
-       [ Shared Isolate Maps / WebSockets / Local DB (Hive/Isar) ]
+[ Presentation Layer ] ──> UI Widgets listening to context.value<Controller>()
+          │
+          ▼
+[ Application / Controller Layer ] ──> CubitSignalMixin holding application state
+          │
+          ▼
+[ Domain / Data Layer ] ──> Reactive Repositories exposing ReadonlySignal<T>
+```
+
+```dart
+class ProductRepository {
+  final _products = signal<IList<Product>>(const IList.empty());
+  ReadonlySignal<IList<Product>> get products => _products;
+
+  void updateProducts(List<Product> newProducts) {
+    _products.value = newProducts.toIList();
+  }
+}
+
+class ProductController extends CubitSignalMixin<AsyncValue<IList<Product>>> {
+  ProductController(this._repo) : super(const AsyncValue.loading()) {
+    // Directly bind domain signals to controller state
+    bindSignal(_repo.products, (products) {
+      emit(AsyncValue.data(products));
+    });
+  }
+
+  final ProductRepository _repo;
+}
 ```
 
 ---
 
-## 4. Universal Signal Adapters: Eliminating `FutureBuilder` & `StreamBuilder`
+## 5. Overcoming Single Inheritance: `CubitSignalMixin` & `BlocSignalMixin` (Part 26)
 
-### Why `FutureBuilder` and `StreamBuilder` are Anti-Patterns
-Async boundaries inside UI views cause:
-- Unnecessary rebuilds during loading states.
-- Tricky widget key retention bugs.
-- UI flickering when state changes rapidly.
-- Mixing presentation logic with async control flow.
-
-### Replacing with Signal Adapters
-Move async execution into the Cubit/Bloc layer and expose pure `Signal<AsyncState<T>>` to the view:
+Dart's single inheritance wall prevents extending both `Cubit` and custom base classes. BlocSignal uses mixins to provide state machine powers to any class hierarchy:
 
 ```dart
-// Cubit Layer
-class UserProfileCubit extends CubitSignalMixin<AsyncValue<UserProfile>> {
-  UserProfileCubit(this._repo) : super(const AsyncValue.loading()) {
-    fetchProfile();
-  }
-
-  final UserRepository _repo;
-
-  Future<void> fetchProfile() async {
-    state = const AsyncValue.loading();
-    try {
-      final user = await _repo.getUser();
-      state = AsyncValue.data(user);
-    } catch (err, st) {
-      state = AsyncValue.error(err, st);
-    }
-  }
+abstract class BaseController {
+  void logAction(String msg) => print('LOG: $msg');
 }
 
-// UI Layer - 100% Synchronous
-class UserProfileView extends StatelessWidget {
-  const UserProfileView({super.key});
+class UserProfileController extends BaseController with CubitSignalMixin<UserProfileState> {
+  UserProfileController() : super(UserProfileState.initial());
+
+  void updateName(String newName) {
+    logAction('Updating name to $newName');
+    emit(state.copyWith(name: newName));
+  }
+}
+```
+
+---
+
+## 6. Solving Riverpod’s Family Provider Cache Dilemma with `mapSignal` (Part 11)
+
+Riverpod Family Providers often suffer from memory retention bugs or awkward `.autoDispose` cache clear mechanics. BlocSignal solves parameter-based signal caching cleanly with `mapSignal`:
+
+```dart
+class UserCacheRepository {
+  // Keyed reactive signal map with automatic memory cleanup
+  final _userSignals = mapSignal<String, UserProfile>();
+
+  Signal<UserProfile?> watchUser(String userId) {
+    return _userSignals.putIfAbsent(userId, () => fetchUserFromApi(userId));
+  }
+}
+```
+
+---
+
+## 7. Universal Signal Adapters: Mechanically Eliminating Async Boundaries (Parts 23, 24)
+
+### Moving Async Operations Away from UI Views
+`FutureBuilder` and `StreamBuilder` in widget trees introduce flickering, state retention bugs, and mixed concerns. Adapter extensions turn Futures and Streams into pure Signals before hitting the UI:
+
+```dart
+// Convert Future or Stream directly to Signal in the Controller
+final Signal<AsyncValue<User>> userSignal = myFuture.toSignal();
+final Signal<AsyncValue<List<Message>>> chatSignal = myStream.toSignal();
+
+// In the UI View: Synchronous pattern matching
+Widget build(BuildContext context) {
+  return context.value<ChatCubit>().chatSignal.value.map(
+    data: (messages) => ListView(...),
+    error: (err, _) => Text('Error: $err'),
+    loading: () => const CircularProgressIndicator(),
+  );
+}
+```
+
+---
+
+## 8. Seamless Flutter Hooks Integration via `signals_hooks` (Part 7)
+
+For developers using `flutter_hooks`, `signals_hooks` provides direct hook primitives:
+
+```dart
+class HookWidgetExample extends HookWidget {
+  const HookWidgetExample({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final profileState = context.value<UserProfileCubit>();
+    // Automatically subscribes hook widget to signal updates
+    final counter = useSignal(context.state<CounterCubit>().countSignal);
 
-    return profileState.map(
-      data: (user) => Text('Welcome, ${user.name}'),
-      error: (err, _) => Text('Error: $err'),
-      loading: () => const CircularProgressIndicator(),
-    );
+    return Text('Count: $counter');
   }
 }
 ```
 
 ---
 
-## 5. One-Shot UI Side Effects (Snackbars, Dialogs, Navigation)
+## 9. Form Management & Validation Patterns (Part 13)
 
-### Avoiding State Pollution
-Never store temporary events (like "show error dialog" or "navigate to home") in persistent reactive state, as state replays or widget rebuilds can re-trigger them unexpectedly.
-
-### Pattern: Side-Effect Signal Bus / Action Streams
-```dart
-abstract class CartEffect {}
-class ShowSnackbarEffect extends CartEffect {
-  ShowSnackbarEffect(this.message);
-  final String message;
-}
-
-class CartCubit extends CubitSignalMixin<CartState> {
-  CartCubit() : super(CartState.initial());
-
-  final _effects = Signal<CartEffect?>(null);
-  Signal<CartEffect?> get effects => _effects;
-
-  void checkout() {
-    // Perform checkout logic...
-    _effects.value = ShowSnackbarEffect('Item added to cart successfully!');
-  }
-}
-```
-
----
-
-## 6. Architectural Decision Guide: Bloc vs Cubit vs Signal
-
-| Criterion | Use Raw Signal | Use CubitSignal | Use BlocSignal |
-| :--- | :--- | :--- | :--- |
-| **Complexity** | Simple, local component state | Medium, domain business logic | High, complex enterprise event streams |
-| **State Transformation** | Synchronous derived computed values | Direct method invocation | Event-driven, debounced, throttled, transformed |
-| **Traceability** | Local reactivity | Method-level tracking | Complete Event-to-State audit trail |
-| **Boilerplate** | Zero | Minimal | Low (significantly lower than classic BLoC) |
-
----
-
-## 7. Reactive Repositories & Zero-Boilerplate Networking
-
-Repositories expose signals or streams converted into signals. Cubits consume them without raw stream listeners or manual subscription management:
+Perform reactive, fine-grained form validation without full form rebuilds using signals per field:
 
 ```dart
-class WeatherRepository {
-  final _temperature = signal<double>(20.0);
-  ReadonlySignal<double> get temperature => _temperature;
+class LoginFormCubit extends CubitSignalMixin<LoginFormState> {
+  LoginFormCubit() : super(LoginFormState.initial());
 
-  void updateTemp(double newTemp) => _temperature.value = newTemp;
-}
+  final emailSignal = signal('');
+  final passwordSignal = signal('');
 
-class WeatherCubit extends CubitSignalMixin<WeatherState> {
-  WeatherCubit(WeatherRepository repo) : super(WeatherState.initial()) {
-    // Bind repo signal directly to Cubit state
-    bindSignal(repo.temperature, (temp) {
-      emit(state.copyWith(temperature: temp));
-    });
-  }
+  late final isValid = computed(() {
+    return emailSignal.value.contains('@') && passwordSignal.value.length >= 6;
+  });
 }
 ```
+
+---
+
+## 10. The Sand in the Oyster: Why Riverpod Was Needed, and Why You Don't Need It (Part 35)
+
+Riverpod was the necessary "sand in the oyster" that forced Flutter state management to move away from context-bound InheritedWidgets toward global, testable state. However, BlocSignal delivers Riverpod's benefits (context-free reactivity, testability, auto-dispose mechanics) **without code generation (`build_runner`), complex provider scoping, or family cache retention pitfalls**.
+
+---
+
+## 11. Summary of Key Architectural Rules
+
+| Pattern | Anti-Pattern to Avoid | BlocSignal Solution |
+| :--- | :--- | :--- |
+| **UI Async Operations** | `FutureBuilder` / `StreamBuilder` in views | Signal Adapters (`toSignal()`) + `AsyncValue` |
+| **Collection State** | Modifying standard Dart `List` in state | Fast Immutable Collections (`FIC`) |
+| **Context Access** | Asymmetric `watch`/`read` | Symmetric `context.value` / `context.state` |
+| **Code Generation** | `@riverpod` or `freezed` build tax | Pure Dart Records, Primary Constructors, & Signals |
+| **Inheritance** | Monolithic `class MyBloc extends Bloc` | Composable `CubitSignalMixin` & `BlocSignalMixin` |
